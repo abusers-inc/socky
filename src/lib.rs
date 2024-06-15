@@ -16,10 +16,8 @@ use async_tungstenite::{
 use fast_socks5::client::Socks5Stream;
 use futures_util::{SinkExt, StreamExt};
 
-use tokio::{
-    io::{AsyncRead, AsyncWrite},
-    net::TcpStream,
-};
+use tokio::io::{AsyncRead, AsyncWrite};
+
 use tokio_rustls::TlsConnector;
 
 type TokioWsSocks5 = WebSocketStream<
@@ -65,12 +63,12 @@ pub enum Error {
     HostIsNotPresent,
 }
 
-pub enum MaybeProxySocket {
+pub enum WebSocket {
     NoProxy(TokioWsNoProxy),
     Socks5(TokioWsSocks5),
     Http(TokioWsHttp),
 }
-impl MaybeProxySocket {
+impl WebSocket {
     pub async fn new_proxy(
         proxy: Proxy,
         domain: String,
@@ -110,16 +108,16 @@ impl MaybeProxySocket {
         msg: Message,
     ) -> Result<(), async_tungstenite::tungstenite::Error> {
         match self {
-            MaybeProxySocket::NoProxy(ws) => ws.send(msg).await,
-            MaybeProxySocket::Socks5(ws) => ws.send(msg).await,
-            MaybeProxySocket::Http(ws) => ws.send(msg).await,
+            WebSocket::NoProxy(ws) => ws.send(msg).await,
+            WebSocket::Socks5(ws) => ws.send(msg).await,
+            WebSocket::Http(ws) => ws.send(msg).await,
         }
     }
     pub async fn flush(&mut self) -> Result<(), async_tungstenite::tungstenite::Error> {
         match self {
-            MaybeProxySocket::NoProxy(ws) => ws.flush().await,
-            MaybeProxySocket::Socks5(ws) => ws.flush().await,
-            MaybeProxySocket::Http(ws) => ws.flush().await,
+            WebSocket::NoProxy(ws) => ws.flush().await,
+            WebSocket::Socks5(ws) => ws.flush().await,
+            WebSocket::Http(ws) => ws.flush().await,
         }
     }
 
@@ -129,9 +127,9 @@ impl MaybeProxySocket {
         Result<async_tungstenite::tungstenite::Message, async_tungstenite::tungstenite::Error>,
     > {
         match self {
-            MaybeProxySocket::NoProxy(ws) => ws.next().await,
-            MaybeProxySocket::Socks5(ws) => ws.next().await,
-            MaybeProxySocket::Http(ws) => ws.next().await,
+            WebSocket::NoProxy(ws) => ws.next().await,
+            WebSocket::Socks5(ws) => ws.next().await,
+            WebSocket::Http(ws) => ws.next().await,
         }
     }
 }
