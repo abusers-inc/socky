@@ -5,6 +5,7 @@ type TokioWsNoProxy = WebSocketStream<
     >,
 >;
 use proxied::{Proxy, ProxyKind};
+use rustls::OwnedTrustAnchor;
 
 use std::sync::Arc;
 
@@ -212,15 +213,19 @@ async fn connect_proxy_tls<T: AsyncRead + AsyncWrite + Unpin>(
     proxy: T,
 ) -> Result<tokio_rustls::client::TlsStream<T>, std::io::Error> {
     let mut root_store = rustls::RootCertStore::empty();
-    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let roots = webpki_roots::TLS_SERVER_ROOTS.into_iter().map(|x| {
+        OwnedTrustAnchor::from_subject_spki_name_constraints(x.subject, x.spki, x.name_constraints)
+    });
+    root_store.roots.extend(roots);
     let config = rustls::ClientConfig::builder()
-        .with_root_certificates(root_store)
+        .with_safe_defaults()
+        .with_root_certificates(Arc::new(root_store))
         .with_no_client_auth();
     let connector = TlsConnector::from(Arc::new(config));
 
     Ok(connector
         .connect(
-            rustls_pki_types::ServerName::try_from(domain).unwrap(),
+            rustls::ServerName::try_from(domain.as_str()).unwrap(),
             proxy,
         )
         .await?)
