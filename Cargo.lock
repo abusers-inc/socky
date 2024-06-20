@@ -515,9 +515,9 @@ dependencies = [
 
 [[package]]
 name = "proxied"
-version = "0.1.0"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "092af7e46ce088c35e5c95253c1a309173fa18d4a8c374fb7a53bf185a9305f4"
+checksum = "630910e54bad724534799e71300ff98daab32a2761754a7e14a1e275ad590029"
 dependencies = [
  "serde",
  "thiserror",
@@ -679,7 +679,7 @@ dependencies = [
 
 [[package]]
 name = "socky"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-http-proxy",
  "async-tungstenite",

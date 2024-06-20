@@ -62,14 +62,21 @@ pub enum Error {
 
     #[error("proxy host is not present")]
     HostIsNotPresent,
+
+    #[error("Can't deduce connection port: nor it is present in request, nor default port for scheme is recognized")]
+    NoPort,
 }
 
-pub enum WebSocket {
+/// External enum to hide implementation details
+enum WebSocketConnection {
     NoProxy(TokioWsNoProxy),
-    Socks5(TokioWsSocks5),
-    Http(TokioWsHttp),
+    SocksTunnel(TokioWsSocks5),
+    HttpTunnel(TokioWsHttp),
 }
+
+pub struct WebSocket(WebSocketConnection);
 impl WebSocket {
+    /// Create socket with proxy, allows for more granular control over Domain/Port
     pub async fn new_proxy(
         proxy: Proxy,
         domain: String,
@@ -84,7 +91,7 @@ impl WebSocket {
 
                 let socket = async_tungstenite::tokio::client_async(request, tls).await?;
 
-                Ok(Self::Socks5(socket.0))
+                Ok(Self(WebSocketConnection::SocksTunnel(socket.0)))
             }
             ProxyKind::Http => {
                 let proxy = connect_http_proxy(proxy, domain.clone(), port).await?;
@@ -92,33 +99,65 @@ impl WebSocket {
 
                 let socket = async_tungstenite::tokio::client_async(request, tls).await?;
 
-                Ok(Self::Http(socket.0))
+                Ok(Self(WebSocketConnection::HttpTunnel(socket.0)))
             }
             _ => todo!(),
         }
     }
 
-    pub async fn new(request: tungstenite::handshake::client::Request) -> Result<Self, Error> {
+    /// Creates socket without using proxy
+
+    pub async fn new_no_proxy(
+        request: tungstenite::handshake::client::Request,
+    ) -> Result<Self, Error> {
         let socket = async_tungstenite::tokio::connect_async(request).await?;
 
-        Ok(Self::NoProxy(socket.0))
+        Ok(Self(WebSocketConnection::NoProxy(socket.0)))
+    }
+
+    pub async fn new(
+        request: impl Into<tungstenite::handshake::client::Request>,
+        proxy: Option<Proxy>,
+    ) -> Result<Self, Error> {
+        let request = request.into();
+
+        match proxy {
+            Some(proxy) => {
+                let uri = request.uri();
+                let domain = uri
+                    .host()
+                    .map(|x| x.to_owned())
+                    .ok_or(Error::HostIsNotPresent)?;
+                let port = match uri.port_u16() {
+                    None => match uri.scheme_str() {
+                        Some(scheme) if scheme == "wss" => 443,
+                        Some(scheme) if scheme == "ws" => 80,
+                        _ => return Err(Error::NoPort),
+                    },
+                    Some(p) => p,
+                };
+
+                Self::new_proxy(proxy, domain, port, request).await
+            }
+            None => Self::new_no_proxy(request).await,
+        }
     }
 
     pub async fn send(
         &mut self,
         msg: Message,
     ) -> Result<(), async_tungstenite::tungstenite::Error> {
-        match self {
-            WebSocket::NoProxy(ws) => ws.send(msg).await,
-            WebSocket::Socks5(ws) => ws.send(msg).await,
-            WebSocket::Http(ws) => ws.send(msg).await,
+        match &mut self.0 {
+            WebSocketConnection::NoProxy(ws) => ws.send(msg).await,
+            WebSocketConnection::SocksTunnel(ws) => ws.send(msg).await,
+            WebSocketConnection::HttpTunnel(ws) => ws.send(msg).await,
         }
     }
     pub async fn flush(&mut self) -> Result<(), async_tungstenite::tungstenite::Error> {
-        match self {
-            WebSocket::NoProxy(ws) => ws.flush().await,
-            WebSocket::Socks5(ws) => ws.flush().await,
-            WebSocket::Http(ws) => ws.flush().await,
+        match &mut self.0 {
+            WebSocketConnection::NoProxy(ws) => ws.flush().await,
+            WebSocketConnection::SocksTunnel(ws) => ws.flush().await,
+            WebSocketConnection::HttpTunnel(ws) => ws.flush().await,
         }
     }
 
@@ -127,10 +166,10 @@ impl WebSocket {
     ) -> Option<
         Result<async_tungstenite::tungstenite::Message, async_tungstenite::tungstenite::Error>,
     > {
-        match self {
-            WebSocket::NoProxy(ws) => ws.next().await,
-            WebSocket::Socks5(ws) => ws.next().await,
-            WebSocket::Http(ws) => ws.next().await,
+        match &mut self.0 {
+            WebSocketConnection::NoProxy(ws) => ws.next().await,
+            WebSocketConnection::SocksTunnel(ws) => ws.next().await,
+            WebSocketConnection::HttpTunnel(ws) => ws.next().await,
         }
     }
 }

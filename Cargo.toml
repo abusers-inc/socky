@@ -1,6 +1,6 @@
 [package]
 name = "socky"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 description = "Websocket proxy support"
 reposity = "https://github.com/abusers-inc/socky"
@@ -11,7 +11,7 @@ async-http-proxy = { version = "1.2.5", features = ["runtime-tokio", "basic-auth
 async-tungstenite = { version = "0.23", features = ["tokio", "tokio-rustls-webpki-roots"] }
 fast-socks5 = "0.9.6"
 futures-util = "0.3.30"
-proxied = "0.1.0"
+proxied = "0.2"
 rustls = "0.21"
 rustls-pki-types = "1.7.0"
 thiserror = "1.0.61"
