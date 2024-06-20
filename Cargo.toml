@@ -1,6 +1,6 @@
 [package]
 name = "socky"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Websocket proxy support"
 reposity = "https://github.com/abusers-inc/socky"

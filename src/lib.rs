@@ -189,7 +189,6 @@ async fn connect_http_proxy(
             resolved_ip.to_string()
         }
         false => format!("{}:{}", proxy.addr.to_string(), proxy.port),
-        _ => todo!(),
     };
 
     let mut stream = tokio::net::TcpStream::connect(host).await?;
