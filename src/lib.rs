@@ -27,6 +27,9 @@ type TokioWsSocks5 = WebSocketStream<
 
 type TokioWsHttp =
     WebSocketStream<TokioAdapter<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>>;
+type TokioWsSocks5NoTls = WebSocketStream<TokioAdapter<Socks5Stream<tokio::net::TcpStream>>>;
+
+type TokioWsHttpNoTls = WebSocketStream<TokioAdapter<tokio::net::TcpStream>>;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -72,6 +75,24 @@ enum WebSocketConnection {
     NoProxy(TokioWsNoProxy),
     SocksTunnel(TokioWsSocks5),
     HttpTunnel(TokioWsHttp),
+    SocksTunnelNoTls(TokioWsSocks5NoTls),
+    HttpTunnelNoTls(TokioWsHttpNoTls),
+}
+
+macro_rules! match_call {
+    ($self_i:expr; $as:ident; $code:expr) => {
+        match $self_i {
+            WebSocketConnection::NoProxy($as) => $code,
+
+            WebSocketConnection::SocksTunnel($as) => $code,
+
+            WebSocketConnection::HttpTunnel($as) => $code,
+
+            WebSocketConnection::SocksTunnelNoTls($as) => $code,
+
+            WebSocketConnection::HttpTunnelNoTls($as) => $code,
+        }
+    };
 }
 
 pub struct WebSocket(WebSocketConnection);
@@ -82,24 +103,43 @@ impl WebSocket {
         domain: String,
         port: u16,
         request: tungstenite::handshake::client::Request,
+        no_tls: bool,
     ) -> Result<Self, Error> {
         match &proxy.kind {
             ProxyKind::Socks5 => {
                 let proxy = connect_socks5_proxy(proxy, domain.clone(), port).await?;
 
-                let tls = connect_proxy_tls(domain, proxy).await?;
+                match no_tls {
+                    true => {
+                        let socket = async_tungstenite::tokio::client_async(request, proxy).await?;
 
-                let socket = async_tungstenite::tokio::client_async(request, tls).await?;
+                        Ok(Self(WebSocketConnection::SocksTunnelNoTls(socket.0)))
+                    }
+                    false => {
+                        let tls = connect_proxy_tls(domain, proxy).await?;
 
-                Ok(Self(WebSocketConnection::SocksTunnel(socket.0)))
+                        let socket = async_tungstenite::tokio::client_async(request, tls).await?;
+
+                        Ok(Self(WebSocketConnection::SocksTunnel(socket.0)))
+                    }
+                }
             }
             ProxyKind::Http => {
                 let proxy = connect_http_proxy(proxy, domain.clone(), port).await?;
-                let tls = connect_proxy_tls(domain, proxy).await?;
 
-                let socket = async_tungstenite::tokio::client_async(request, tls).await?;
+                match no_tls {
+                    true => {
+                        let socket = async_tungstenite::tokio::client_async(request, proxy).await?;
 
-                Ok(Self(WebSocketConnection::HttpTunnel(socket.0)))
+                        Ok(Self(WebSocketConnection::HttpTunnelNoTls(socket.0)))
+                    }
+                    false => {
+                        let tls = connect_proxy_tls(domain, proxy).await?;
+                        let socket = async_tungstenite::tokio::client_async(request, tls).await?;
+
+                        Ok(Self(WebSocketConnection::HttpTunnel(socket.0)))
+                    }
+                }
             }
             _ => todo!(),
         }
@@ -118,6 +158,7 @@ impl WebSocket {
     pub async fn new(
         request: impl Into<tungstenite::handshake::client::Request>,
         proxy: Option<Proxy>,
+        no_tls: bool,
     ) -> Result<Self, Error> {
         let request = request.into();
 
@@ -137,7 +178,7 @@ impl WebSocket {
                     Some(p) => p,
                 };
 
-                Self::new_proxy(proxy, domain, port, request).await
+                Self::new_proxy(proxy, domain, port, request, no_tls).await
             }
             None => Self::new_no_proxy(request).await,
         }
@@ -147,18 +188,10 @@ impl WebSocket {
         &mut self,
         msg: Message,
     ) -> Result<(), async_tungstenite::tungstenite::Error> {
-        match &mut self.0 {
-            WebSocketConnection::NoProxy(ws) => ws.send(msg).await,
-            WebSocketConnection::SocksTunnel(ws) => ws.send(msg).await,
-            WebSocketConnection::HttpTunnel(ws) => ws.send(msg).await,
-        }
+        match_call!(&mut self.0; ws; ws.send(msg).await)
     }
     pub async fn flush(&mut self) -> Result<(), async_tungstenite::tungstenite::Error> {
-        match &mut self.0 {
-            WebSocketConnection::NoProxy(ws) => ws.flush().await,
-            WebSocketConnection::SocksTunnel(ws) => ws.flush().await,
-            WebSocketConnection::HttpTunnel(ws) => ws.flush().await,
-        }
+        match_call!(&mut self.0; ws; ws.flush().await)
     }
 
     pub async fn next(
@@ -166,11 +199,7 @@ impl WebSocket {
     ) -> Option<
         Result<async_tungstenite::tungstenite::Message, async_tungstenite::tungstenite::Error>,
     > {
-        match &mut self.0 {
-            WebSocketConnection::NoProxy(ws) => ws.next().await,
-            WebSocketConnection::SocksTunnel(ws) => ws.next().await,
-            WebSocketConnection::HttpTunnel(ws) => ws.next().await,
-        }
+        match_call!(&mut self.0; ws; ws.next().await)
     }
 }
 
