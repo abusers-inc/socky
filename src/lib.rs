@@ -5,7 +5,7 @@ type TokioWsNoProxy = WebSocketStream<
     >,
 >;
 use proxied::{Proxy, ProxyKind};
-use rustls::OwnedTrustAnchor;
+use rustls::{Certificate, OwnedTrustAnchor};
 
 use std::sync::Arc;
 
@@ -287,6 +287,14 @@ async fn connect_proxy_tls<T: AsyncRead + AsyncWrite + Unpin>(
             x.name_constraints.as_ref().map(|x| x.to_vec()),
         )
     });
+
+    let certs = rustls_native_certs::load_native_certs().ok();
+
+    if let Some(certs) = certs {
+        for cert in certs {
+            root_store.add(&Certificate(cert.to_vec()));
+        }
+    }
 
     root_store.add_trust_anchors(roots);
     let config = rustls::ClientConfig::builder()

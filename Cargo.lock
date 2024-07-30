@@ -775,6 +775,7 @@ dependencies = [
  "futures-util",
  "proxied",
  "rustls 0.21.12",
+ "rustls-native-certs",
  "rustls-pki-types",
  "rustls-platform-verifier",
  "thiserror",
