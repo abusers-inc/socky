@@ -12,12 +12,13 @@ async-tungstenite = { version = "0.23", features = ["tokio", "tokio-rustls-webpk
 fast-socks5 = "0.9.6"
 futures-util = "0.3.30"
 proxied = "0.2"
-rustls = "0.21"
+rustls = "0.21.12"
 rustls-pki-types = "1.7.0"
+rustls-platform-verifier = "0.3.3"
 thiserror = "1.0.61"
 tokio = { version = "1.38.0", features = ["sync", "rt", "macros"] }
 tokio-rustls = "0.24.1"
 url = "2.5.1"
-webpki-roots = "0.25.4"
+webpki-roots = "0.26.3"
 
 

@@ -281,9 +281,14 @@ async fn connect_proxy_tls<T: AsyncRead + AsyncWrite + Unpin>(
 ) -> Result<tokio_rustls::client::TlsStream<T>, std::io::Error> {
     let mut root_store = rustls::RootCertStore::empty();
     let roots = webpki_roots::TLS_SERVER_ROOTS.into_iter().map(|x| {
-        OwnedTrustAnchor::from_subject_spki_name_constraints(x.subject, x.spki, x.name_constraints)
+        OwnedTrustAnchor::from_subject_spki_name_constraints(
+            x.subject.to_vec(),
+            x.subject_public_key_info.to_vec(),
+            x.name_constraints.as_ref().map(|x| x.to_vec()),
+        )
     });
-    root_store.roots.extend(roots);
+
+    root_store.add_trust_anchors(roots);
     let config = rustls::ClientConfig::builder()
         .with_safe_defaults()
         .with_root_certificates(Arc::new(root_store))
