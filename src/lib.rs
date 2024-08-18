@@ -1,42 +1,40 @@
-type TokioWsNoProxy = WebSocketStream<
-    async_tungstenite::stream::Stream<
-        TokioAdapter<tokio::net::TcpStream>,
-        TokioAdapter<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
-    >,
->;
 use proxied::{Proxy, ProxyKind};
 use rustls::{Certificate, OwnedTrustAnchor};
 
 use std::sync::Arc;
 
 use async_tungstenite::{
+    stream::Stream,
     tokio::TokioAdapter,
     tungstenite::{self, Message},
     WebSocketStream,
 };
-use fast_socks5::client::Socks5Stream;
 use futures_util::{SinkExt, StreamExt};
 
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use tokio_rustls::TlsConnector;
 
-type TokioWsSocks5 = WebSocketStream<
-    TokioAdapter<tokio_rustls::client::TlsStream<Socks5Stream<tokio::net::TcpStream>>>,
+type StreamWsProxy = WebSocketStream<
+    Stream<
+        TokioAdapter<proxied::TCPConnection>,
+        TokioAdapter<tokio_rustls::client::TlsStream<proxied::TCPConnection>>,
+    >,
 >;
 
-type TokioWsHttp =
-    WebSocketStream<TokioAdapter<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>>;
-type TokioWsSocks5NoTls = WebSocketStream<TokioAdapter<Socks5Stream<tokio::net::TcpStream>>>;
-
-type TokioWsHttpNoTls = WebSocketStream<TokioAdapter<tokio::net::TcpStream>>;
+type StreamNoProxy = WebSocketStream<
+    Stream<
+        TokioAdapter<tokio::net::TcpStream>,
+        TokioAdapter<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
+    >,
+>;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
-    #[error("fast_socks5 stream error")]
-    Socks5 {
+    #[error("Proxy connection failed")]
+    ProxyConnect {
         #[from]
-        source: fast_socks5::SocksError,
+        soruce: proxied::ConnectError,
     },
 
     #[error("Input output failed")]
@@ -49,12 +47,6 @@ pub enum Error {
     Tungstenite {
         #[from]
         source: async_tungstenite::tungstenite::Error,
-    },
-
-    #[error("http proxy failed connecting")]
-    AsyncHttp {
-        #[from]
-        source: async_http_proxy::HttpError,
     },
 
     #[error("proxy address parse failed")]
@@ -72,25 +64,16 @@ pub enum Error {
 
 /// External enum to hide implementation details
 enum WebSocketConnection {
-    NoProxy(TokioWsNoProxy),
-    SocksTunnel(TokioWsSocks5),
-    HttpTunnel(TokioWsHttp),
-    SocksTunnelNoTls(TokioWsSocks5NoTls),
-    HttpTunnelNoTls(TokioWsHttpNoTls),
+    Proxied(StreamWsProxy),
+    NotProxied(StreamNoProxy),
 }
 
 macro_rules! match_call {
     ($self_i:expr; $as:ident; $code:expr) => {
         match $self_i {
-            WebSocketConnection::NoProxy($as) => $code,
+            WebSocketConnection::Proxied($as) => $code,
 
-            WebSocketConnection::SocksTunnel($as) => $code,
-
-            WebSocketConnection::HttpTunnel($as) => $code,
-
-            WebSocketConnection::SocksTunnelNoTls($as) => $code,
-
-            WebSocketConnection::HttpTunnelNoTls($as) => $code,
+            WebSocketConnection::NotProxied($as) => $code,
         }
     };
 }
@@ -105,54 +88,62 @@ impl WebSocket {
         request: tungstenite::handshake::client::Request,
         no_tls: bool,
     ) -> Result<Self, Error> {
-        match &proxy.kind {
-            ProxyKind::Socks5 => {
-                let proxy = connect_socks5_proxy(proxy, domain.clone(), port).await?;
+        let stream = proxy
+            .connect_tcp(proxied::NetworkTarget::Domain {
+                domain: domain.clone(),
+                port,
+            })
+            .await?;
 
-                match no_tls {
-                    true => {
-                        let socket = async_tungstenite::tokio::client_async(request, proxy).await?;
+        match no_tls {
+            true => {
+                let (mut client, _) =
+                    async_tungstenite::tokio::client_async(request, stream).await?;
 
-                        Ok(Self(WebSocketConnection::SocksTunnelNoTls(socket.0)))
-                    }
-                    false => {
-                        let tls = connect_proxy_tls(domain, proxy).await?;
+                let stream = unsafe { std::ptr::read(client.get_mut()) };
 
-                        let socket = async_tungstenite::tokio::client_async(request, tls).await?;
+                std::mem::forget(client);
 
-                        Ok(Self(WebSocketConnection::SocksTunnel(socket.0)))
-                    }
-                }
+                let correct_client = WebSocketStream::from_raw_socket(
+                    Stream::Plain(stream),
+                    tungstenite::protocol::Role::Client,
+                    None,
+                )
+                .await;
+
+                Ok(Self(WebSocketConnection::Proxied(correct_client)))
             }
-            ProxyKind::Http => {
-                let proxy = connect_http_proxy(proxy, domain.clone(), port).await?;
+            false => {
+                let tls = connect_tls(domain, stream).await?;
 
-                match no_tls {
-                    true => {
-                        let socket = async_tungstenite::tokio::client_async(request, proxy).await?;
+                let (mut client, _) = async_tungstenite::tokio::client_async(request, tls).await?;
 
-                        Ok(Self(WebSocketConnection::HttpTunnelNoTls(socket.0)))
-                    }
-                    false => {
-                        let tls = connect_proxy_tls(domain, proxy).await?;
-                        let socket = async_tungstenite::tokio::client_async(request, tls).await?;
+                let stream = unsafe { std::ptr::read(client.get_mut()) };
 
-                        Ok(Self(WebSocketConnection::HttpTunnel(socket.0)))
-                    }
-                }
+                std::mem::forget(client);
+
+                let client = WebSocketStream::from_raw_socket(
+                    Stream::Tls(stream),
+                    tungstenite::protocol::Role::Client,
+                    None,
+                )
+                .await;
+
+                Ok(Self(WebSocketConnection::Proxied(client)))
             }
-            _ => todo!(),
         }
     }
 
     /// Creates socket without using proxy
-
     pub async fn new_no_proxy(
         request: tungstenite::handshake::client::Request,
+        no_tls: bool,
     ) -> Result<Self, Error> {
         let socket = async_tungstenite::tokio::connect_async(request).await?;
 
-        Ok(Self(WebSocketConnection::NoProxy(socket.0)))
+        // TODO: handle no_tls option
+
+        Ok(Self(WebSocketConnection::NotProxied(socket.0)))
     }
 
     pub async fn new(
@@ -180,7 +171,7 @@ impl WebSocket {
 
                 Self::new_proxy(proxy, domain, port, request, no_tls).await
             }
-            None => Self::new_no_proxy(request).await,
+            None => Self::new_no_proxy(request, no_tls).await,
         }
     }
 
@@ -203,81 +194,9 @@ impl WebSocket {
     }
 }
 
-async fn connect_http_proxy(
-    proxy: Proxy,
+async fn connect_tls<T: AsyncRead + AsyncWrite + Unpin>(
     domain: String,
-    port: u16,
-) -> Result<tokio::net::TcpStream, Error> {
-    let host = match proxy.addr.chars().any(char::is_alphabetic) {
-        true => {
-            let resolved_ip =
-                tokio::net::lookup_host(format!("{}:{}", proxy.addr.to_string(), proxy.port))
-                    .await?
-                    .collect::<Vec<_>>();
-            let resolved_ip = resolved_ip.get(0).ok_or(Error::HostIsNotPresent)?;
-            resolved_ip.to_string()
-        }
-        false => format!("{}:{}", proxy.addr.to_string(), proxy.port),
-    };
-
-    let mut stream = tokio::net::TcpStream::connect(host).await?;
-
-    match proxy.creds {
-        Some((login, password)) => {
-            async_http_proxy::http_connect_tokio_with_basic_auth(
-                &mut stream,
-                &domain,
-                port,
-                &login,
-                &password,
-            )
-            .await?
-        }
-
-        None => async_http_proxy::http_connect_tokio(&mut stream, &domain, port).await?,
-    };
-
-    Ok(stream)
-}
-
-async fn connect_socks5_proxy(
-    proxy: Proxy,
-    domain: String,
-    port: u16,
-) -> Result<fast_socks5::client::Socks5Stream<tokio::net::TcpStream>, fast_socks5::SocksError> {
-    let socks_ip = format!("{}:{}", proxy.addr, proxy.port);
-
-    let socks;
-
-    match proxy.creds {
-        Some(creds) => {
-            socks = Socks5Stream::connect_with_password(
-                socks_ip,
-                domain.to_owned(),
-                port,
-                creds.0,
-                creds.1,
-                fast_socks5::client::Config::default(),
-            )
-            .await?;
-        }
-        None => {
-            socks = Socks5Stream::connect(
-                socks_ip,
-                domain.to_owned(),
-                port,
-                fast_socks5::client::Config::default(),
-            )
-            .await?;
-        }
-    }
-
-    Ok(socks)
-}
-
-async fn connect_proxy_tls<T: AsyncRead + AsyncWrite + Unpin>(
-    domain: String,
-    proxy: T,
+    stream: T,
 ) -> Result<tokio_rustls::client::TlsStream<T>, std::io::Error> {
     let mut root_store = rustls::RootCertStore::empty();
     let roots = webpki_roots::TLS_SERVER_ROOTS.into_iter().map(|x| {
@@ -306,7 +225,7 @@ async fn connect_proxy_tls<T: AsyncRead + AsyncWrite + Unpin>(
     Ok(connector
         .connect(
             rustls::ServerName::try_from(domain.as_str()).unwrap(),
-            proxy,
+            stream,
         )
         .await?)
 }

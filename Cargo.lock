@@ -493,12 +493,16 @@ dependencies = [
 
 [[package]]
 name = "proxied"
-version = "0.2.2"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "630910e54bad724534799e71300ff98daab32a2761754a7e14a1e275ad590029"
+checksum = "a0cabf5684e91cdc309062e83fd38f0c669cc47dc9d85396d02e69b3e172574f"
 dependencies = [
+ "async-http-proxy",
+ "fast-socks5",
  "serde",
  "thiserror",
+ "tokio",
+ "uri",
 ]
 
 [[package]]
@@ -769,9 +773,7 @@ dependencies = [
 name = "socky"
 version = "0.2.1"
 dependencies = [
- "async-http-proxy",
  "async-tungstenite",
- "fast-socks5",
  "futures-util",
  "proxied",
  "rustls 0.21.12",
@@ -781,6 +783,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-rustls",
+ "tracing",
  "url",
  "webpki-roots 0.26.3",
 ]
@@ -892,6 +895,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing"
+version = "0.1.40"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3523ab5a71916ccf420eebdf5521fcef02141234bbc0b8a49f2fdc4544364ef"
+dependencies = [
+ "pin-project-lite",
+ "tracing-attributes",
+ "tracing-core",
+]
+
+[[package]]
+name = "tracing-attributes"
+version = "0.1.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34704c8d6ebcbc939824180af020566b01a7c01f80641264eba0999f6c2b6be7"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "tracing-core"
+version = "0.1.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c06d3da6113f116aaee68e4d601191614c9053067f9ab7f6edbcb161237daa54"
+dependencies = [
+ "once_cell",
+]
+
+[[package]]
 name = "tungstenite"
 version = "0.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -943,6 +977,12 @@ name = "untrusted"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
+
+[[package]]
+name = "uri"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5c61fea9e6205d0d14c7e6efe252f15ed404da4cbdbe4ecd1de0a4d7241829f"
 
 [[package]]
 name = "url"
