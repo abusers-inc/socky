@@ -9,11 +9,10 @@ license = "MIT"
 [dependencies]
 async-tungstenite = { version = "0.23", features = ["tokio", "tokio-rustls-webpki-roots"] }
 futures-util = "0.3.30"
-proxied = "0.3"
+proxied = "0.3.5"
 rustls = "0.21.12"
 rustls-native-certs = "0.7.1"
 rustls-pki-types = "1.7.0"
-rustls-platform-verifier = "0.3.3"
 thiserror = "1.0.61"
 tokio = { version = "1.38.0", features = ["sync", "rt", "macros"] }
 tokio-rustls = "0.24.1"
