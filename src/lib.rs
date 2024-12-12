@@ -1,4 +1,4 @@
-use proxied::{Proxy, ProxyKind};
+use proxied::{Proxy, TCPConnection};
 use rustls::{Certificate, OwnedTrustAnchor};
 
 use std::sync::Arc;
@@ -15,12 +15,9 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use tokio_rustls::TlsConnector;
 
-type StreamWsProxy = WebSocketStream<
-    Stream<
-        TokioAdapter<proxied::TCPConnection>,
-        TokioAdapter<tokio_rustls::client::TlsStream<proxied::TCPConnection>>,
-    >,
->;
+type StreamWsProxy = WebSocketStream<TokioAdapter<TCPConnection>>;
+type StreamWsProxyTls =
+    WebSocketStream<TokioAdapter<tokio_rustls::client::TlsStream<TCPConnection>>>;
 
 type StreamNoProxy = WebSocketStream<
     Stream<
@@ -64,6 +61,7 @@ pub enum Error {
 
 /// External enum to hide implementation details
 enum WebSocketConnection {
+    ProxiedTls(StreamWsProxyTls),
     Proxied(StreamWsProxy),
     NotProxied(StreamNoProxy),
 }
@@ -71,8 +69,8 @@ enum WebSocketConnection {
 macro_rules! match_call {
     ($self_i:expr; $as:ident; $code:expr) => {
         match $self_i {
+            WebSocketConnection::ProxiedTls($as) => $code,
             WebSocketConnection::Proxied($as) => $code,
-
             WebSocketConnection::NotProxied($as) => $code,
         }
     };
@@ -97,39 +95,16 @@ impl WebSocket {
 
         match no_tls {
             true => {
-                let (mut client, _) =
-                    async_tungstenite::tokio::client_async(request, stream).await?;
+                let (client, _) = async_tungstenite::tokio::client_async(request, stream).await?;
 
-                let stream = unsafe { std::ptr::read(client.get_mut()) };
-
-                std::mem::forget(client);
-
-                let correct_client = WebSocketStream::from_raw_socket(
-                    Stream::Plain(stream),
-                    tungstenite::protocol::Role::Client,
-                    None,
-                )
-                .await;
-
-                Ok(Self(WebSocketConnection::Proxied(correct_client)))
+                Ok(Self(WebSocketConnection::Proxied(client)))
             }
             false => {
                 let tls = connect_tls(domain, stream).await?;
 
-                let (mut client, _) = async_tungstenite::tokio::client_async(request, tls).await?;
+                let (client, _) = async_tungstenite::tokio::client_async(request, tls).await?;
 
-                let stream = unsafe { std::ptr::read(client.get_mut()) };
-
-                std::mem::forget(client);
-
-                let client = WebSocketStream::from_raw_socket(
-                    Stream::Tls(stream),
-                    tungstenite::protocol::Role::Client,
-                    None,
-                )
-                .await;
-
-                Ok(Self(WebSocketConnection::Proxied(client)))
+                Ok(Self(WebSocketConnection::ProxiedTls(client)))
             }
         }
     }
