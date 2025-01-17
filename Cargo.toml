@@ -1,21 +1,22 @@
 [package]
 name = "socky"
-version = "0.2.4"
+version = "1.0.0"
 edition = "2021"
-description = "Websocket proxy support"
-reposity = "https://github.com/abusers-inc/socky"
+description = "async_tungstenite with proxy support"
+repository = "https://github.com/abusers-inc/socky"
 license = "MIT"
 
 [dependencies]
-async-tungstenite = { version = "0.23", features = ["tokio", "tokio-rustls-webpki-roots"] }
+async-tungstenite = { version = "0.28", features = ["tokio", "tokio-rustls-webpki-roots"] }
+derive_builder = "0.20.2"
 futures-util = "0.3.30"
-proxied = "0.3.5"
-rustls = "0.21.12"
+proxied = "0.3"
+rustls = "0.23.21"
 rustls-native-certs = "0.7.1"
 rustls-pki-types = "1.7.0"
 thiserror = "1.0.61"
 tokio = { version = "1.38.0", features = ["sync", "rt", "macros"] }
-tokio-rustls = "0.24.1"
+tokio-rustls = "0.26.1"
 tracing = "0.1.40"
 url = "2.5.1"
 webpki-roots = "0.26.3"

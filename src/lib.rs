@@ -1,18 +1,11 @@
+use async_tungstenite::{stream::Stream, tokio::TokioAdapter, WebSocketStream};
+use errors::{ConnectionError, Error, InvalidURL, TlsError};
+use futures_util::{Sink, SinkExt, StreamExt};
 use proxied::{Proxy, TCPConnection};
-use rustls::{Certificate, OwnedTrustAnchor};
-
-use std::sync::Arc;
-
-use async_tungstenite::{
-    stream::Stream,
-    tokio::TokioAdapter,
-    tungstenite::{self, Message},
-    WebSocketStream,
-};
-use futures_util::{SinkExt, StreamExt};
-
+use rustls::{client::WebPkiServerVerifier, ClientConfig, RootCertStore};
+use rustls_pki_types::{DnsName, ServerName};
+use std::{pin::pin, sync::Arc};
 use tokio::io::{AsyncRead, AsyncWrite};
-
 use tokio_rustls::TlsConnector;
 
 type StreamWsProxy = WebSocketStream<TokioAdapter<TCPConnection>>;
@@ -26,38 +19,12 @@ type StreamNoProxy = WebSocketStream<
     >,
 >;
 
-#[derive(thiserror::Error, Debug)]
-pub enum Error {
-    #[error("Proxy connection failed")]
-    ProxyConnect {
-        #[from]
-        soruce: proxied::ConnectError,
-    },
+pub use async_tungstenite::tungstenite;
+pub use tungstenite::{
+    client::IntoClientRequest, handshake::client::Request, ClientRequestBuilder, Message,
+};
 
-    #[error("Input output failed")]
-    IO {
-        #[from]
-        source: std::io::Error,
-    },
-
-    #[error("async-tungstenite failed connecting")]
-    Tungstenite {
-        #[from]
-        source: async_tungstenite::tungstenite::Error,
-    },
-
-    #[error("proxy address parse failed")]
-    UrlParse {
-        #[from]
-        source: url::ParseError,
-    },
-
-    #[error("proxy host is not present")]
-    HostIsNotPresent,
-
-    #[error("Can't deduce connection port: nor it is present in request, nor default port for scheme is recognized")]
-    NoPort,
-}
+pub mod errors;
 
 /// External enum to hide implementation details
 enum WebSocketConnection {
@@ -79,13 +46,13 @@ macro_rules! match_call {
 pub struct WebSocket(WebSocketConnection);
 impl WebSocket {
     /// Create socket with proxy, allows for more granular control over Domain/Port
-    pub async fn new_proxy(
+    async fn new_proxy(
         proxy: Proxy,
         domain: String,
         port: u16,
-        request: tungstenite::handshake::client::Request,
-        no_tls: bool,
-    ) -> Result<Self, Error> {
+        request: Request,
+        use_tls: bool,
+    ) -> Result<Self, ConnectionError> {
         let stream = proxy
             .connect_tcp(proxied::NetworkTarget::Domain {
                 domain: domain.clone(),
@@ -93,13 +60,13 @@ impl WebSocket {
             })
             .await?;
 
-        match no_tls {
-            true => {
+        match use_tls {
+            false => {
                 let (client, _) = async_tungstenite::tokio::client_async(request, stream).await?;
 
                 Ok(Self(WebSocketConnection::Proxied(client)))
             }
-            false => {
+            true => {
                 let tls = connect_tls(domain, stream).await?;
 
                 let (client, _) = async_tungstenite::tokio::client_async(request, tls).await?;
@@ -110,97 +77,212 @@ impl WebSocket {
     }
 
     /// Creates socket without using proxy
-    pub async fn new_no_proxy(
-        request: tungstenite::handshake::client::Request,
-        no_tls: bool,
-    ) -> Result<Self, Error> {
+    async fn new_no_proxy(request: Request, use_tls: bool) -> Result<Self, ConnectionError> {
         let socket = async_tungstenite::tokio::connect_async(request).await?;
 
         // TODO: handle no_tls option
 
         Ok(Self(WebSocketConnection::NotProxied(socket.0)))
     }
+}
 
-    pub async fn new(
-        request: impl Into<tungstenite::handshake::client::Request>,
-        proxy: Option<Proxy>,
-        no_tls: bool,
-    ) -> Result<Self, Error> {
-        let request = request.into();
+impl Sink<Message> for WebSocket {
+    type Error = errors::Error;
 
-        match proxy {
+    fn poll_ready(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        match &mut (self.as_mut().0) {
+            WebSocketConnection::ProxiedTls(web_socket_stream) => {
+                let inner = pin!(web_socket_stream);
+
+                <_ as Sink<Message>>::poll_ready(inner, cx)
+                    .map_err(|e| errors::Error::TungsteniteFailure { source: e })
+            }
+            WebSocketConnection::Proxied(web_socket_stream) => {
+                let inner = pin!(web_socket_stream);
+
+                <_ as Sink<Message>>::poll_ready(inner, cx)
+                    .map_err(|e| errors::Error::TungsteniteFailure { source: e })
+            }
+            WebSocketConnection::NotProxied(web_socket_stream) => {
+                let inner = pin!(web_socket_stream);
+
+                <_ as Sink<Message>>::poll_ready(inner, cx)
+                    .map_err(|e| errors::Error::TungsteniteFailure { source: e })
+            }
+        }
+    }
+
+    fn start_send(mut self: std::pin::Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
+        match &mut (self.as_mut().0) {
+            WebSocketConnection::ProxiedTls(web_socket_stream) => {
+                let inner = pin!(web_socket_stream);
+
+                <_ as Sink<Message>>::start_send(inner, item)
+                    .map_err(|e| errors::Error::TungsteniteFailure { source: e })
+            }
+            WebSocketConnection::Proxied(web_socket_stream) => {
+                let inner = pin!(web_socket_stream);
+
+                <_ as Sink<Message>>::start_send(inner, item)
+                    .map_err(|e| errors::Error::TungsteniteFailure { source: e })
+            }
+            WebSocketConnection::NotProxied(web_socket_stream) => {
+                let inner = pin!(web_socket_stream);
+
+                <_ as Sink<Message>>::start_send(inner, item)
+                    .map_err(|e| errors::Error::TungsteniteFailure { source: e })
+            }
+        }
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        match &mut (self.as_mut().0) {
+            WebSocketConnection::ProxiedTls(web_socket_stream) => {
+                let inner = pin!(web_socket_stream);
+
+                <_ as Sink<Message>>::poll_flush(inner, cx)
+                    .map_err(|e| errors::Error::TungsteniteFailure { source: e })
+            }
+            WebSocketConnection::Proxied(web_socket_stream) => {
+                let inner = pin!(web_socket_stream);
+
+                <_ as Sink<Message>>::poll_flush(inner, cx)
+                    .map_err(|e| errors::Error::TungsteniteFailure { source: e })
+            }
+            WebSocketConnection::NotProxied(web_socket_stream) => {
+                let inner = pin!(web_socket_stream);
+
+                <_ as Sink<Message>>::poll_flush(inner, cx)
+                    .map_err(|e| errors::Error::TungsteniteFailure { source: e })
+            }
+        }
+    }
+
+    fn poll_close(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        match &mut (self.as_mut().0) {
+            WebSocketConnection::ProxiedTls(web_socket_stream) => {
+                let inner = pin!(web_socket_stream);
+
+                <_ as Sink<Message>>::poll_close(inner, cx)
+                    .map_err(|e| errors::Error::TungsteniteFailure { source: e })
+            }
+            WebSocketConnection::Proxied(web_socket_stream) => {
+                let inner = pin!(web_socket_stream);
+
+                <_ as Sink<Message>>::poll_close(inner, cx)
+                    .map_err(|e| errors::Error::TungsteniteFailure { source: e })
+            }
+            WebSocketConnection::NotProxied(web_socket_stream) => {
+                let inner = pin!(web_socket_stream);
+
+                <_ as Sink<Message>>::poll_close(inner, cx)
+                    .map_err(|e| errors::Error::TungsteniteFailure { source: e })
+            }
+        }
+    }
+}
+
+impl futures_util::Stream for WebSocket {
+    type Item = Result<Message, errors::Error>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        match &mut (self.as_mut().0) {
+            WebSocketConnection::ProxiedTls(web_socket_stream) => {
+                let inner = pin!(web_socket_stream);
+
+                <_ as futures_util::Stream>::poll_next(inner, cx)
+                    .map_err(|e| errors::Error::TungsteniteFailure { source: e })
+            }
+            WebSocketConnection::Proxied(web_socket_stream) => {
+                let inner = pin!(web_socket_stream);
+
+                <_ as futures_util::Stream>::poll_next(inner, cx)
+                    .map_err(|e| errors::Error::TungsteniteFailure { source: e })
+            }
+            WebSocketConnection::NotProxied(web_socket_stream) => {
+                let inner = pin!(web_socket_stream);
+
+                <_ as futures_util::Stream>::poll_next(inner, cx)
+                    .map_err(|e| errors::Error::TungsteniteFailure { source: e })
+            }
+        }
+    }
+}
+
+/// WebSocket Connection builder. You should start here
+#[derive(derive_builder::Builder)]
+pub struct ConnectionRequest {
+    #[builder(setter(strip_option), default)]
+    proxy: Option<Proxy>,
+    #[builder(setter(into))]
+    request: Request,
+
+    #[builder(default = "true")]
+    use_tls: bool,
+}
+
+impl ConnectionRequest {
+    pub async fn connect(self) -> Result<WebSocket, errors::ConnectionError> {
+        match self.proxy {
             Some(proxy) => {
-                let uri = request.uri();
+                let uri = self.request.uri();
                 let domain = uri
                     .host()
                     .map(|x| x.to_owned())
-                    .ok_or(Error::HostIsNotPresent)?;
+                    .ok_or(ConnectionError::URL(InvalidURL::MissingHost.into()))?;
                 let port = match uri.port_u16() {
                     None => match uri.scheme_str() {
-                        Some(scheme) if scheme == "wss" => 443,
-                        Some(scheme) if scheme == "ws" => 80,
-                        _ => return Err(Error::NoPort),
+                        Some("wss") => 443,
+                        Some("ws") => 80,
+                        _ => return Err(ConnectionError::URL(InvalidURL::MissingScheme.into())),
                     },
                     Some(p) => p,
                 };
 
-                Self::new_proxy(proxy, domain, port, request, no_tls).await
+                WebSocket::new_proxy(proxy, domain, port, self.request, self.use_tls).await
             }
-            None => Self::new_no_proxy(request, no_tls).await,
+            None => WebSocket::new_no_proxy(self.request, self.use_tls).await,
         }
     }
-
-    pub async fn send(
-        &mut self,
-        msg: Message,
-    ) -> Result<(), async_tungstenite::tungstenite::Error> {
-        match_call!(&mut self.0; ws; ws.send(msg).await)
-    }
-    pub async fn flush(&mut self) -> Result<(), async_tungstenite::tungstenite::Error> {
-        match_call!(&mut self.0; ws; ws.flush().await)
-    }
-
-    pub async fn next(
-        &mut self,
-    ) -> Option<
-        Result<async_tungstenite::tungstenite::Message, async_tungstenite::tungstenite::Error>,
-    > {
-        match_call!(&mut self.0; ws; ws.next().await)
+    pub fn builder() -> ConnectionRequestBuilder {
+        ConnectionRequestBuilder::create_empty()
     }
 }
 
 async fn connect_tls<T: AsyncRead + AsyncWrite + Unpin>(
     domain: String,
     stream: T,
-) -> Result<tokio_rustls::client::TlsStream<T>, std::io::Error> {
-    let mut root_store = rustls::RootCertStore::empty();
-    let roots = webpki_roots::TLS_SERVER_ROOTS.into_iter().map(|x| {
-        OwnedTrustAnchor::from_subject_spki_name_constraints(
-            x.subject.to_vec(),
-            x.subject_public_key_info.to_vec(),
-            x.name_constraints.as_ref().map(|x| x.to_vec()),
-        )
-    });
+) -> Result<tokio_rustls::client::TlsStream<T>, TlsError> {
+    let root_cert_store = RootCertStore {
+        roots: webpki_roots::TLS_SERVER_ROOTS.to_owned(),
+    };
 
-    let certs = rustls_native_certs::load_native_certs().ok();
+    let webpki_verifier = WebPkiServerVerifier::builder(root_cert_store.into())
+        .build()
+        .unwrap();
 
-    if let Some(certs) = certs {
-        for cert in certs {
-            root_store.add(&Certificate(cert.to_vec()));
-        }
-    }
-
-    root_store.add_trust_anchors(roots);
-    let config = rustls::ClientConfig::builder()
-        .with_safe_defaults()
-        .with_root_certificates(Arc::new(root_store))
+    let client_config = ClientConfig::builder()
+        .with_webpki_verifier(webpki_verifier)
         .with_no_client_auth();
-    let connector = TlsConnector::from(Arc::new(config));
+
+    let connector = TlsConnector::from(Arc::new(client_config));
+
+    let dns_name =
+        DnsName::try_from(domain.clone()).map_err(|_| TlsError::DomainParsing { domain })?;
 
     Ok(connector
-        .connect(
-            rustls::ServerName::try_from(domain.as_str()).unwrap(),
-            stream,
-        )
+        .connect(ServerName::DnsName(dns_name), stream)
         .await?)
 }
