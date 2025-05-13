@@ -222,14 +222,13 @@ impl futures_util::Stream for WebSocket {
 }
 
 /// WebSocket Connection builder. You should start here
-#[derive(derive_builder::Builder)]
+#[derive(bon::Builder)]
 pub struct ConnectionRequest {
-    #[builder(setter(strip_option), default)]
     proxy: Option<Proxy>,
-    #[builder(setter(into))]
+    #[builder(into)]
     request: Request,
 
-    #[builder(default = "true")]
+    #[builder(default = true)]
     use_tls: bool,
 }
 
@@ -255,9 +254,6 @@ impl ConnectionRequest {
             }
             None => WebSocket::new_no_proxy(self.request, self.use_tls).await,
         }
-    }
-    pub fn builder() -> ConnectionRequestBuilder {
-        ConnectionRequestBuilder::create_empty()
     }
 }
 
