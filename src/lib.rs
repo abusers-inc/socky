@@ -1,23 +1,21 @@
 use async_tungstenite::{stream::Stream, tokio::TokioAdapter, WebSocketStream};
 use errors::{ConnectionError, Error, InvalidURL, TlsError};
 use futures_util::{Sink, SinkExt, StreamExt};
-use proxied::{Proxy, TCPConnection};
+use proxied::Proxy;
 use rustls::{client::WebPkiServerVerifier, ClientConfig, RootCertStore};
 use rustls_pki_types::{DnsName, ServerName};
 use std::{pin::pin, sync::Arc};
-use tokio::io::{AsyncRead, AsyncWrite};
-use tokio_rustls::TlsConnector;
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    net::TcpStream,
+};
+use tokio_rustls::{client::TlsStream, TlsConnector};
 
-type StreamWsProxy = WebSocketStream<TokioAdapter<TCPConnection>>;
-type StreamWsProxyTls =
-    WebSocketStream<TokioAdapter<tokio_rustls::client::TlsStream<TCPConnection>>>;
+type StreamWsProxy = WebSocketStream<TokioAdapter<TcpStream>>;
+type StreamWsProxyTls = WebSocketStream<TokioAdapter<TlsStream<TcpStream>>>;
 
-type StreamNoProxy = WebSocketStream<
-    Stream<
-        TokioAdapter<tokio::net::TcpStream>,
-        TokioAdapter<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
-    >,
->;
+type StreamNoProxy =
+    WebSocketStream<Stream<TokioAdapter<TcpStream>, TokioAdapter<TlsStream<TcpStream>>>>;
 
 pub use async_tungstenite::tungstenite;
 pub use tungstenite::{
@@ -260,7 +258,7 @@ impl ConnectionRequest {
 async fn connect_tls<T: AsyncRead + AsyncWrite + Unpin>(
     domain: String,
     stream: T,
-) -> Result<tokio_rustls::client::TlsStream<T>, TlsError> {
+) -> Result<TlsStream<T>, TlsError> {
     let root_cert_store = RootCertStore {
         roots: webpki_roots::TLS_SERVER_ROOTS.to_owned(),
     };

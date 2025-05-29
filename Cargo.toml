@@ -1,6 +1,6 @@
 [package]
 name = "socky"
-version = "2.0.0"
+version = "2.0.1"
 edition = "2021"
 description = "async_tungstenite with proxy support"
 repository = "https://github.com/abusers-inc/socky"
@@ -10,7 +10,7 @@ license = "MIT"
 async-tungstenite = { version = "0.28", features = ["tokio", "tokio-rustls-webpki-roots"] }
 bon = "3.6.3"
 futures-util = "0.3.30"
-proxied = "0.3"
+proxied = "1"
 rustls = "0.23.21"
 rustls-native-certs = "0.7.1"
 rustls-pki-types = "1.7.0"
